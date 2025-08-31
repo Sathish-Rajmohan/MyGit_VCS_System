@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+
+# mygit-status - Shows the status of files in the working directory and index
+# Usage: mygit-status
+
+import os
+import sys
+
+def files_are_same(file1, file2):
+    """Check if two files have the same content"""
+    if not (os.path.exists(file1) and os.path.exists(file2)):
+        return False
+    try:
+        with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+            return f1.read() == f2.read()
+    except:
+        return False
+
+def get_latest_commit_file(filename):
+    """Get the path to filename in the latest commit, or None if file was removed"""
+    commit_count_file = '.mygit/commit_count'
+    if not os.path.exists(commit_count_file):
+        return None
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    
+    # FIXED: Check commits from newest to oldest, but return the LATEST state
+    # If file doesn't exist in the most recent commit, it was removed
+    if commit_count > 0:
+        latest_commit_file = os.path.join('.mygit', 'objects', str(commit_count - 1), filename)
+        if os.path.exists(latest_commit_file):
+            return latest_commit_file
+        else:
+            # File doesn't exist in latest commit - it was removed
+            return None
+    
+    return None
+
+def main():
+    if not os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: no .mygit directory containing mygit repository exists", file=sys.stderr)
+        sys.exit(1)
+    
+    # Get all files in current directory (excluding mygit scripts and hidden files)
+    current_files = set()
+    for item in os.listdir('.'):
+        if os.path.isfile(item) and not item.startswith('.') and not item.startswith('mygit-'):
+            current_files.add(item)
+    
+    # Get all files in index
+    index_files = set()
+    index_dir = '.mygit/index'
+    if os.path.exists(index_dir):
+        for item in os.listdir(index_dir):
+            index_files.add(item)
+    
+    # Get all files in repository (from all commits)
+    repo_files = set()
+    objects_dir = '.mygit/objects'
+    if os.path.exists(objects_dir):
+        for commit_dir in os.listdir(objects_dir):
+            commit_path = os.path.join(objects_dir, commit_dir)
+            if os.path.isdir(commit_path):
+                for item in os.listdir(commit_path):
+                    if not item.startswith('.'):
+                        repo_files.add(item)
+    
+    # Combine all files
+    all_files = current_files | index_files | repo_files
+    
+    # Analyze each file's status
+    statuses = []
+    
+    for filename in sorted(all_files):
+        current_exists = filename in current_files
+        index_exists = filename in index_files
+        
+        current_file = filename
+        index_file = os.path.join('.mygit', 'index', filename)
+        latest_commit_file = get_latest_commit_file(filename)
+        
+        # FIXED: Skip files that don't exist in index, current directory, AND latest commit
+        # This handles the case where a file was removed and the removal was committed
+        if not index_exists and not current_exists and not latest_commit_file:
+            continue
+        
+        if index_exists and not current_exists:
+            if latest_commit_file:
+                if files_are_same(index_file, latest_commit_file):
+                    statuses.append((filename, "file deleted"))
+                else:
+                    statuses.append((filename, "added to index, file deleted"))
+            else:
+                statuses.append((filename, "added to index, file deleted"))
+        elif not index_exists and current_exists:
+            # FIXED: If file exists in working directory but not in index,
+            # it should be "untracked" if it doesn't exist in latest commit,
+            # or "deleted from index" if it does exist in latest commit
+            if latest_commit_file:
+                statuses.append((filename, "deleted from index"))
+            else:
+                statuses.append((filename, "untracked"))
+        elif index_exists and current_exists:
+            current_same_as_index = files_are_same(current_file, index_file)
+            
+            if latest_commit_file:
+                index_same_as_repo = files_are_same(index_file, latest_commit_file)
+                
+                if current_same_as_index and index_same_as_repo:
+                    statuses.append((filename, "same as repo"))
+                elif current_same_as_index and not index_same_as_repo:
+                    statuses.append((filename, "file changed, changes staged for commit"))
+                elif not current_same_as_index and index_same_as_repo:
+                    statuses.append((filename, "file changed, changes not staged for commit"))
+                else:
+                    statuses.append((filename, "file changed, different changes staged for commit"))
+            else:
+                if current_same_as_index:
+                    statuses.append((filename, "added to index"))
+                else:
+                    statuses.append((filename, "added to index, file changed"))
+        elif not index_exists and not current_exists:
+            # FIXED: Only show "file deleted, deleted from index" if file exists in latest commit
+            # This prevents showing deleted status for files that were already committed as removed
+            if latest_commit_file:
+                statuses.append((filename, "file deleted, deleted from index"))
+    
+    # Print statuses
+    for filename, status in statuses:
+        print(f"{filename} - {status}")
+
+if __name__ == '__main__':
+    main()

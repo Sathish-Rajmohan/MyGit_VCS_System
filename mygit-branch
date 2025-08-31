@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+
+# mygit-branch - Creates a new branch
+# Either creates a branch, deletes a branch, or lists current branch names.
+# Usage: mygit-branch <branch_name>
+# where <branch_name> is the name of the new branch
+
+
+import os
+import sys
+import shutil
+
+def get_latest_commit():
+    """Get the latest commit number for the current branch"""
+    commit_count_file = '.mygit/commit_count'
+    if not os.path.exists(commit_count_file):
+        return None
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    
+    current_branch_file = '.mygit/current_branch'
+    current_branch = 'trunk'
+    if os.path.exists(current_branch_file):
+        with open(current_branch_file, 'r') as f:
+            current_branch = f.read().strip()
+    
+    for commit_num in range(commit_count - 1, -1, -1):
+        branch_file = os.path.join('.mygit', 'objects', str(commit_num), '.branch')
+        if os.path.exists(branch_file):
+            with open(branch_file, 'r') as f:
+                commit_branch = f.read().strip()
+            if commit_branch == current_branch:
+                return commit_num
+    return None
+
+def files_are_same(file1, file2):
+    """Check if two files have the same content"""
+    if not (os.path.exists(file1) and os.path.exists(file2)):
+        return False
+    try:
+        with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+            return f1.read() == f2.read()
+    except:
+        return False
+
+def has_unmerged_changes(branch_name, current_branch):
+    """Check if a branch has unmerged changes relative to current branch"""
+    branch_commit = get_latest_commit_for_branch(branch_name)
+    
+    if branch_commit is None:
+        return False
+    
+    branch_commit_dir = os.path.join('.mygit', 'objects', str(branch_commit))
+    if not os.path.exists(branch_commit_dir):
+        return False
+    
+    branch_files = set()
+    for filename in os.listdir(branch_commit_dir):
+        if not filename.startswith('.'):
+            branch_files.add(filename)
+    
+    index_dir = '.mygit/index'
+    if not os.path.exists(index_dir):
+        return len(branch_files) > 0
+    
+    index_files = set()
+    for filename in os.listdir(index_dir):
+        index_files.add(filename)
+    
+    for filename in branch_files:
+        branch_file = os.path.join(branch_commit_dir, filename)
+        index_file = os.path.join(index_dir, filename)
+        
+        if not os.path.exists(index_file):
+            return True
+        
+        if not files_are_same(branch_file, index_file):
+            return True
+    
+    return False
+
+def get_latest_commit_for_branch(branch_name):
+    """Get the latest commit for a specific branch"""
+    commit_count_file = '.mygit/commit_count'
+    if not os.path.exists(commit_count_file):
+        return None
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    
+    for commit_num in range(commit_count - 1, -1, -1):
+        branch_file = os.path.join('.mygit', 'objects', str(commit_num), '.branch')
+        if os.path.exists(branch_file):
+            with open(branch_file, 'r') as f:
+                commit_branch = f.read().strip()
+            if commit_branch == branch_name:
+                return commit_num
+    return None
+
+def has_commits():
+    """Check if there are any commits in the repository"""
+    commit_count_file = '.mygit/commit_count'
+    if not os.path.exists(commit_count_file):
+        return False
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    return commit_count > 0
+
+def main():
+    if not os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: no .mygit directory containing mygit repository exists", file=sys.stderr)
+        sys.exit(1)
+    
+    if not has_commits():
+        print(f"{os.path.basename(sys.argv[0])}: error: this command can not be run until after the first commit", file=sys.stderr)
+        sys.exit(1)
+    
+    delete = False
+    branch_name = None
+    
+    if len(sys.argv) == 1:
+        branches_file = '.mygit/branches'
+        if os.path.exists(branches_file):
+            branches_to_display = []
+            with open(branches_file, 'r') as f:
+                for line in f:
+                    branch = line.strip()
+                    if branch:
+                        branches_to_display.append(branch)
+            
+            branches_to_display.sort()
+            for branch in branches_to_display:
+                print(branch)
+        sys.exit(0)
+    
+    if sys.argv[1] == '-d':
+        if len(sys.argv) != 3:
+            print(f"usage: {os.path.basename(sys.argv[0])} [-d] <branch>", file=sys.stderr)
+            sys.exit(1)
+        delete = True
+        branch_name = sys.argv[2]
+    else:
+        if len(sys.argv) != 2:
+            print(f"usage: {os.path.basename(sys.argv[0])} [-d] <branch>", file=sys.stderr)
+            sys.exit(1)
+        branch_name = sys.argv[1]
+    
+    branches_file = '.mygit/branches'
+    branches = []
+    if os.path.exists(branches_file):
+        with open(branches_file, 'r') as f:
+            for line in f:
+                branch = line.strip()
+                if branch and branch not in branches:
+                    branches.append(branch)
+    
+    if delete:
+        if branch_name not in branches:
+            print(f"{os.path.basename(sys.argv[0])}: error: branch '{branch_name}' doesn't exist", file=sys.stderr)
+            sys.exit(1)
+        
+        if branch_name == 'trunk':
+            print(f"{os.path.basename(sys.argv[0])}: error: can not delete branch '{branch_name}': default branch", file=sys.stderr)
+            sys.exit(1)
+        
+        current_branch_file = '.mygit/current_branch'
+        current_branch = 'trunk'
+        if os.path.exists(current_branch_file):
+            with open(current_branch_file, 'r') as f:
+                current_branch = f.read().strip()
+        
+        if has_unmerged_changes(branch_name, current_branch):
+            print(f"{os.path.basename(sys.argv[0])}: error: branch '{branch_name}' has unmerged changes", file=sys.stderr)
+            sys.exit(1)
+        
+        branches.remove(branch_name)
+        with open(branches_file, 'w') as f:
+            for b in branches:
+                f.write(f"{b}\n")
+        print(f"Deleted branch '{branch_name}'")
+    else:
+        if branch_name in branches:
+            print(f"{os.path.basename(sys.argv[0])}: error: branch '{branch_name}' already exists", file=sys.stderr)
+            sys.exit(1)
+        
+        branches.append(branch_name)
+        with open(branches_file, 'w') as f:
+            for b in branches:
+                f.write(f"{b}\n")
+        
+        # Associate new branch with the latest commit of the current branch
+        latest_commit = get_latest_commit()
+        if latest_commit is not None:
+            branch_file = os.path.join('.mygit', 'objects', str(latest_commit), '.branch')
+            with open(branch_file, 'w') as f:
+                f.write(branch_name)
+            # Save a snapshot of branches file for this commit
+            branches_snapshot = os.path.join('.mygit', 'objects', str(latest_commit), '.branches_snapshot')
+            shutil.copy2(branches_file, branches_snapshot)
+
+if __name__ == '__main__':
+    main()

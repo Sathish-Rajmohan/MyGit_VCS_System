@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+
+# mygit-commit - Records changes to the repository
+# Usage: mygit-commit [-a] -m <message>
+# where <message> is the commit message
+
+import os
+import sys
+import shutil
+
+def main():
+    if not os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: no .mygit directory containing mygit repository exists", file=sys.stderr)
+        sys.exit(1)
+    
+    # Parse arguments
+    auto_add = False
+    message = None
+    
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i] == '-a':
+            auto_add = True
+        elif sys.argv[i] == '-m':
+            if i + 1 >= len(sys.argv):
+                print(f"usage: {os.path.basename(sys.argv[0])} [-a] -m <message>", file=sys.stderr)
+                sys.exit(1)
+            message = sys.argv[i + 1]
+            i += 1
+        i += 1
+    
+    if message is None:
+        print(f"usage: {os.path.basename(sys.argv[0])} [-a] -m <message>", file=sys.stderr)
+        sys.exit(1)
+    
+    # If -a option, add all files currently in index from current directory
+    if auto_add:
+        index_dir = '.mygit/index'
+        if os.path.exists(index_dir):
+            for filename in os.listdir(index_dir):
+                if os.path.exists(filename) and os.path.isfile(filename):
+                    shutil.copy2(filename, os.path.join(index_dir, filename))
+    
+    # Check if there are any changes to commit
+    index_dir = '.mygit/index'
+    has_changes = False
+    
+    if os.path.exists(index_dir):
+        # Get current commit number to find the latest commit
+        commit_count_file = '.mygit/commit_count'
+        with open(commit_count_file, 'r') as f:
+            current_commit_num = int(f.read().strip())
+        
+        # Find the latest commit directory
+        latest_commit_dir = None
+        if current_commit_num > 0:
+            latest_commit_dir = f'.mygit/objects/{current_commit_num - 1}'
+        
+        # Check if index has files
+        index_files = set()
+        if os.path.exists(index_dir):
+            index_files = set(os.listdir(index_dir))
+        
+        # Check if latest commit has files
+        commit_files = set()
+        if latest_commit_dir and os.path.exists(latest_commit_dir):
+            commit_files = set(f for f in os.listdir(latest_commit_dir) if not f.startswith('.'))
+        
+        # Compare files
+        if index_files != commit_files:
+            has_changes = True
+        else:
+            # Check if any file contents have changed
+            for filename in index_files:
+                index_file = os.path.join(index_dir, filename)
+                if latest_commit_dir:
+                    commit_file = os.path.join(latest_commit_dir, filename)
+                    if not os.path.exists(commit_file):
+                        has_changes = True
+                        break
+                    # Compare file contents
+                    try:
+                        with open(index_file, 'rb') as f1, open(commit_file, 'rb') as f2:
+                            if f1.read() != f2.read():
+                                has_changes = True
+                                break
+                    except:
+                        has_changes = True
+                        break
+                else:
+                    # No previous commit, so this is a change
+                    has_changes = True
+                    break
+    
+    if not has_changes:
+        print("nothing to commit")
+        return
+    
+    # Get commit number
+    commit_count_file = '.mygit/commit_count'
+    with open(commit_count_file, 'r') as f:
+        commit_num = int(f.read().strip())
+    
+    # Create commit directory
+    commit_dir = f'.mygit/objects/{commit_num}'
+    os.makedirs(commit_dir, exist_ok=True)
+    
+    # Copy files from index to commit
+    index_dir = '.mygit/index'
+    if os.path.exists(index_dir):
+        for filename in os.listdir(index_dir):
+            src = os.path.join(index_dir, filename)
+            dst = os.path.join(commit_dir, filename)
+            shutil.copy2(src, dst)
+    
+    # Save commit message
+    with open(os.path.join(commit_dir, '.commit_message'), 'w') as f:
+        f.write(message)
+    
+    # Get current branch
+    with open('.mygit/current_branch', 'r') as f:
+        current_branch = f.read().strip()
+    
+    # Save branch info for this commit
+    with open(os.path.join(commit_dir, '.branch'), 'w') as f:
+        f.write(current_branch)
+    
+    # Update commit count
+    with open(commit_count_file, 'w') as f:
+        f.write(str(commit_num + 1))
+    
+    print(f"Committed as commit {commit_num}")
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+
+# mygit-rm - Removes files from the index and working directory
+# Usage: mygit-rm [--cached] <filenames>
+# where <filenames> is a list of files to remove
+
+import os
+import sys
+
+def files_are_same(file1, file2):
+    """Check if two files have the same content"""
+    try:
+        with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+            return f1.read() == f2.read()
+    except:
+        return False
+
+def get_latest_commit_file(filename):
+    """Get the path to filename in the latest commit only"""
+    commit_count_file = '.mygit/commit_count'
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    
+    # FIXED: Only check the very latest commit, not all commits
+    # This is crucial for handling files that were removed with --cached
+    if commit_count > 0:
+        latest_commit_num = commit_count - 1
+        commit_file = os.path.join('.mygit', 'objects', str(latest_commit_num), filename)
+        if os.path.exists(commit_file):
+            return commit_file
+    return None
+
+def main():
+    if not os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: no .mygit directory containing mygit repository exists", file=sys.stderr)
+        sys.exit(1)
+    
+    # Parse arguments
+    force = False
+    cached = False
+    filenames = []
+    
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i] == '--force':
+            force = True
+        elif sys.argv[i] == '--cached':
+            cached = True
+        else:
+            filenames.append(sys.argv[i])
+        i += 1
+    
+    if not filenames:
+        print(f"usage: {os.path.basename(sys.argv[0])} [--force] [--cached] <filenames>", file=sys.stderr)
+        sys.exit(1)
+    
+    # FIXED: Check ALL files first - if ANY file is not in the repository, abort completely
+    for filename in filenames:
+        index_file = os.path.join('.mygit', 'index', filename)
+        if not os.path.exists(index_file):
+            print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' is not in the mygit repository", file=sys.stderr)
+            sys.exit(1)
+    
+    # All files exist in repository, now process each one
+    for filename in filenames:
+        index_file = os.path.join('.mygit', 'index', filename)
+        current_file = filename
+        
+        # Safety checks (unless --force is used)
+        if not force:
+            # Check if current file exists and differs from index
+            current_exists = os.path.exists(current_file)
+            
+            # Get latest commit file for comparison
+            latest_commit_file = get_latest_commit_file(filename)
+            
+            if not current_exists:
+                # File doesn't exist in working directory
+                if latest_commit_file and not files_are_same(index_file, latest_commit_file):
+                    print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' has staged changes in the index", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                # File exists in working directory
+                current_same_as_index = files_are_same(current_file, index_file)
+                
+                if latest_commit_file:
+                    index_same_as_repo = files_are_same(index_file, latest_commit_file)
+                    current_same_as_repo = files_are_same(current_file, latest_commit_file)
+                    
+                    # Fixed logic for safety checks
+                    if cached:
+                        # FIXED: For --cached, we're only removing from index, not working directory
+                        # So we only need to prevent cases where the index has unique changes that would be lost
+                        # We should NOT prevent removal when working file differs from repo but index matches repo
+                        if not current_same_as_index and not index_same_as_repo:
+                            print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' in index is different to both the working file and the repository", file=sys.stderr)
+                            sys.exit(1)
+                        # Removed the check for "not current_same_as_repo and index_same_as_repo" 
+                        # because --cached only removes from index, leaving working file intact
+                    else:
+                        # For regular rm, apply all safety checks
+                        if not current_same_as_index and not index_same_as_repo:
+                            print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' in index is different to both the working file and the repository", file=sys.stderr)
+                            sys.exit(1)
+                        elif not current_same_as_repo and index_same_as_repo:
+                            print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' in the repository is different to the working file", file=sys.stderr)
+                            sys.exit(1)
+                        elif not index_same_as_repo and current_same_as_index:
+                            print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' has staged changes in the index", file=sys.stderr)
+                            sys.exit(1)
+                else:
+                    # File not in repository (newly added)
+                    # FIXED: Always check for staged changes when file is not in any commit
+                    # The key insight is that if a file is in the index but not in any commit,
+                    # it always has "staged changes" regardless of whether working file matches index
+                    if not current_same_as_index:
+                        print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' in index is different to both the working file and the repository", file=sys.stderr)
+                        sys.exit(1)
+                    elif not cached:
+                        # FIXED: For files not in any commit, they always have staged changes
+                        # unless we're using --cached (which allows removing from index while keeping in working dir)
+                        print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' has staged changes in the index", file=sys.stderr)
+                        sys.exit(1)
+        
+        # Remove from index
+        os.remove(index_file)
+        
+        # Remove from current directory (unless --cached)
+        if not cached and os.path.exists(current_file):
+            os.remove(current_file)
+
+if __name__ == '__main__':
+    main()

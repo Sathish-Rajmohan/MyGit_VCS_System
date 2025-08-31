@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+
+# mygit-show - Shows the contents of a file in the repository
+# Usage: mygit-show [<commit>:]<filename>
+# where <commit> is the commit hash (optional) and <filename> is the name of the file
+
+import os
+import sys
+
+def main():
+    if len(sys.argv) != 2:
+        print(f"usage: {os.path.basename(sys.argv[0])} [<commit>:]<filename>", file=sys.stderr)
+        sys.exit(1)
+    
+    if not os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: no .mygit directory containing mygit repository exists", file=sys.stderr)
+        sys.exit(1)
+    
+    arg = sys.argv[1]
+    
+    if ':' in arg:
+        commit_str, filename = arg.split(':', 1)
+        if commit_str == '':
+            # Show from index
+            file_path = os.path.join('.mygit', 'index', filename)
+        else:
+            # Show from specific commit
+            try:
+                commit_num = int(commit_str)
+                # Check if commit exists
+                commit_count_file = '.mygit/commit_count'
+                with open(commit_count_file, 'r') as f:
+                    commit_count = int(f.read().strip())
+                if commit_num >= commit_count:
+                    print(f"{os.path.basename(sys.argv[0])}: error: unknown commit '{commit_str}'", file=sys.stderr)
+                    sys.exit(1)
+                file_path = os.path.join('.mygit', 'objects', str(commit_num), filename)
+            except ValueError:
+                print(f"{os.path.basename(sys.argv[0])}: error: unknown commit '{commit_str}'", file=sys.stderr)
+                sys.exit(1)
+    else:
+        # No colon, treat as filename from index
+        filename = arg
+        file_path = os.path.join('.mygit', 'index', filename)
+    
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+        print(content, end='')
+    except FileNotFoundError:
+        print(f"{os.path.basename(sys.argv[0])}: error: '{filename}' not found in", file=sys.stderr, end='')
+        if ':' in arg and commit_str != '':
+            print(f" commit {commit_str}", file=sys.stderr)
+        else:
+            print(" index", file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        print(f"{os.path.basename(sys.argv[0])}: error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

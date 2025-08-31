@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+
+# mygit-merge - Merges changes from one branch into another
+# Usage: mygit-merge <branch_name>
+# where <branch_name> is the name of the branch to merge
+
+import os
+import sys
+import shutil
+
+def files_are_same(file1, file2):
+    """Check if two files have the same content"""
+    if not (os.path.exists(file1) and os.path.exists(file2)):
+        return False
+    try:
+        with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+            return f1.read() == f2.read()
+    except:
+        return False
+
+def get_latest_commit_for_branch(branch_name):
+    """Get the latest commit for a branch"""
+    commit_count_file = '.mygit/commit_count'
+    if not os.path.exists(commit_count_file):
+        return None
+    
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    
+    for commit_num in range(commit_count - 1, -1, -1):
+        branch_file = os.path.join('.mygit', 'objects', str(commit_num), '.branch')
+        if os.path.exists(branch_file):
+            with open(branch_file, 'r') as f:
+                commit_branch = f.read().strip()
+            if commit_branch == branch_name:
+                return commit_num
+    return None
+
+def find_common_ancestor(current_commit, merge_commit):
+    """Find the common ancestor of two commits"""
+    if current_commit is None or merge_commit is None:
+        return None
+    min_commit = min(current_commit, merge_commit)
+    if min_commit == 0:
+        return 0
+    return min_commit - 1
+
+def main():
+    if len(sys.argv) < 2:
+        print(f"usage: {os.path.basename(sys.argv[0])} <branch|commit> -m <message>", file=sys.stderr)
+        sys.exit(1)
+    
+    if not os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: no .mygit directory containing mygit repository exists", file=sys.stderr)
+        sys.exit(1)
+    
+    # Parse arguments
+    merge_message = None
+    branch_or_commit = None
+    
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i] == '-m':
+            if i + 1 >= len(sys.argv):
+                print(f"usage: {os.path.basename(sys.argv[0])} <branch|commit> -m <message>", file=sys.stderr)
+                sys.exit(1)
+            merge_message = sys.argv[i + 1]
+            i += 2
+        else:
+            if branch_or_commit is None:
+                branch_or_commit = sys.argv[i]
+                i += 1
+            else:
+                print(f"usage: {os.path.basename(sys.argv[0])} <branch|commit> -m <message>", file=sys.stderr)
+                sys.exit(1)
+    
+    if branch_or_commit is None:
+        print(f"usage: {os.path.basename(sys.argv[0])} <branch|commit> -m <message>", file=sys.stderr)
+        sys.exit(1)
+    
+    if merge_message is None:
+        print(f"{os.path.basename(sys.argv[0])}: error: empty commit message", file=sys.stderr)
+        sys.exit(1)
+    
+    # Determine if it's a branch name or commit number
+    is_commit_number = branch_or_commit.isdigit()
+    
+    if is_commit_number:
+        merge_commit = int(branch_or_commit)
+        commit_dir = os.path.join('.mygit', 'objects', str(merge_commit))
+        if not os.path.exists(commit_dir):
+            print(f"{os.path.basename(sys.argv[0])}: error: unknown commit '{branch_or_commit}'", file=sys.stderr)
+            sys.exit(1)
+    else:
+        branch_name = branch_or_commit
+        branches_file = '.mygit/branches'
+        branches = set()
+        if os.path.exists(branches_file):
+            with open(branches_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        branches.add(line)
+        
+        if branch_name not in branches:
+            print(f"{os.path.basename(sys.argv[0])}: error: unknown branch '{branch_name}'", file=sys.stderr)
+            sys.exit(1)
+        
+        current_branch_file = '.mygit/current_branch'
+        current_branch = 'trunk'
+        if os.path.exists(current_branch_file):
+            with open(current_branch_file, 'r') as f:
+                current_branch = f.read().strip()
+        
+        if branch_name == current_branch:
+            print(f"Already on '{branch_name}'")
+            sys.exit(0)
+        
+        merge_commit = get_latest_commit_for_branch(branch_name)
+        if merge_commit is None:
+            print(f"{os.path.basename(sys.argv[0])}: error: branch '{branch_name}' has no commits", file=sys.stderr)
+            sys.exit(1)
+    
+    current_branch_file = '.mygit/current_branch'
+    current_branch = 'trunk'
+    if os.path.exists(current_branch_file):
+        with open(current_branch_file, 'r') as f:
+            current_branch = f.read().strip()
+    
+    current_commit = get_latest_commit_for_branch(current_branch)
+    
+    common_ancestor = find_common_ancestor(current_commit, merge_commit)
+    
+    current_files = set()
+    merge_files = set()
+    ancestor_files = set()
+    
+    if current_commit is not None:
+        current_commit_dir = os.path.join('.mygit', 'objects', str(current_commit))
+        if os.path.exists(current_commit_dir):
+            for filename in os.listdir(current_commit_dir):
+                if not filename.startswith('.'):
+                    current_files.add(filename)
+    
+    merge_commit_dir = os.path.join('.mygit', 'objects', str(merge_commit))
+    if os.path.exists(merge_commit_dir):
+        for filename in os.listdir(merge_commit_dir):
+            if not filename.startswith('.'):
+                merge_files.add(filename)
+    
+    if common_ancestor is not None:
+        ancestor_commit_dir = os.path.join('.mygit', 'objects', str(common_ancestor))
+        if os.path.exists(ancestor_commit_dir):
+            for filename in os.listdir(ancestor_commit_dir):
+                if not filename.startswith('.'):
+                    ancestor_files.add(filename)
+    
+    conflicts = []
+    all_files = current_files | merge_files | ancestor_files
+    
+    for filename in all_files:
+        current_file = os.path.join(current_commit_dir, filename) if current_commit is not None else None
+        merge_file = os.path.join(merge_commit_dir, filename)
+        ancestor_file = os.path.join(ancestor_commit_dir, filename) if common_ancestor is not None else None
+        
+        current_exists = current_file and os.path.exists(current_file)
+        merge_exists = os.path.exists(merge_file)
+        ancestor_exists = ancestor_file and os.path.exists(ancestor_file)
+        
+        current_changed = False
+        merge_changed = False
+        
+        if ancestor_exists:
+            if current_exists:
+                current_changed = not files_are_same(current_file, ancestor_file)
+            else:
+                current_changed = True
+            if merge_exists:
+                merge_changed = not files_are_same(merge_file, ancestor_file)
+            else:
+                merge_changed = True
+        else:
+            current_changed = current_exists
+            merge_changed = merge_exists
+        
+        if current_changed and merge_changed:
+            if current_exists and merge_exists:
+                if not files_are_same(current_file, merge_file):
+                    conflicts.append(filename)
+            elif current_exists != merge_exists:
+                conflicts.append(filename)
+    
+    if conflicts:
+        print(f"{os.path.basename(sys.argv[0])}: error: These files can not be merged:", file=sys.stderr)
+        for filename in sorted(conflicts):
+            print(filename, file=sys.stderr)
+        sys.exit(1)
+    
+    if current_commit is None or current_commit <= merge_commit:
+        print("Fast-forward: no commit created")
+        
+        current_working_files = set()
+        for item in os.listdir('.'):
+            if os.path.isfile(item) and not item.startswith('.') and not item.startswith('mygit-'):
+                current_working_files.add(item)
+        
+        for filename in current_working_files:
+            if filename not in merge_files:
+                os.remove(filename)
+        
+        for filename in merge_files:
+            src = os.path.join(merge_commit_dir, filename)
+            if os.path.exists(src):
+                shutil.copy2(src, filename)
+        
+        index_dir = '.mygit/index'
+        if os.path.exists(index_dir):
+            shutil.rmtree(index_dir)
+        os.makedirs(index_dir)
+        for filename in merge_files:
+            src = os.path.join(merge_commit_dir, filename)
+            dst = os.path.join(index_dir, filename)
+            if os.path.exists(src):
+                shutil.copy2(src, dst)
+        
+        # Update current branch to point to the merge commit
+        with open(os.path.join('.mygit', 'objects', str(merge_commit), '.branch'), 'w') as f:
+            f.write(current_branch)
+        
+        sys.exit(0)
+    
+    commit_count_file = '.mygit/commit_count'
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    
+    new_commit_dir = os.path.join('.mygit', 'objects', str(commit_count))
+    os.makedirs(new_commit_dir)
+    
+    all_files = current_files | merge_files
+    for filename in all_files:
+        current_file = os.path.join(current_commit_dir, filename) if current_commit is not None else None
+        merge_file = os.path.join(merge_commit_dir, filename)
+        ancestor_file = os.path.join(ancestor_commit_dir, filename) if common_ancestor is not None else None
+        
+        current_exists = current_file and os.path.exists(current_file)
+        merge_exists = os.path.exists(merge_file)
+        ancestor_exists = ancestor_file and os.path.exists(ancestor_file)
+        
+        dst = os.path.join(new_commit_dir, filename)
+        
+        if ancestor_exists:
+            current_changed = False
+            merge_changed = False
+            
+            if current_exists:
+                current_changed = not files_are_same(current_file, ancestor_file)
+            else:
+                current_changed = True
+            if merge_exists:
+                merge_changed = not files_are_same(merge_file, ancestor_file)
+            else:
+                merge_changed = True
+            
+            if merge_changed and not current_changed:
+                if merge_exists:
+                    shutil.copy2(merge_file, dst)
+            elif current_changed and not merge_changed:
+                if current_exists:
+                    shutil.copy2(current_file, dst)
+            elif not current_changed and not merge_changed:
+                if current_exists:
+                    shutil.copy2(current_file, dst)
+                elif merge_exists:
+                    shutil.copy2(merge_file, dst)
+        else:
+            if merge_exists and not current_exists:
+                shutil.copy2(merge_file, dst)
+            elif current_exists and not merge_exists:
+                shutil.copy2(current_file, dst)
+            elif current_exists and merge_exists:
+                shutil.copy2(merge_file, dst)
+    
+    index_dir = '.mygit/index'
+    if os.path.exists(index_dir):
+        shutil.rmtree(index_dir)
+    os.makedirs(index_dir)
+    for filename in all_files:
+        src = os.path.join(new_commit_dir, filename)
+        dst = os.path.join(index_dir, filename)
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+    
+    current_working_files = set()
+    for item in os.listdir('.'):
+        if os.path.isfile(item) and not item.startswith('.') and not item.startswith('mygit-'):
+            current_working_files.add(item)
+    
+    for filename in current_working_files:
+        if filename not in all_files:
+            os.remove(filename)
+    
+    for filename in all_files:
+        src = os.path.join(new_commit_dir, filename)
+        if os.path.exists(src):
+            shutil.copy2(src, filename)
+    
+    with open(os.path.join(new_commit_dir, '.branch'), 'w') as f:
+        f.write(current_branch)
+    with open(os.path.join(new_commit_dir, '.commit_message'), 'w') as f:
+        f.write(merge_message)
+    
+    with open(commit_count_file, 'w') as f:
+        f.write(str(commit_count + 1))
+    
+    print(f"Committed as commit {commit_count}")
+
+if __name__ == '__main__':
+    main()

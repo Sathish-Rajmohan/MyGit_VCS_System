@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+
+# mygit-init - Initializes a new mygit repository
+# Usage: mygit-init
+
+import os
+import sys
+
+def main():
+    if os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: .mygit already exists", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        os.makedirs('.mygit')
+        os.makedirs('.mygit/index')
+        os.makedirs('.mygit/objects')
+        os.makedirs('.mygit/refs')
+        
+        # Create initial branch file
+        with open('.mygit/refs/HEAD', 'w') as f:
+            f.write('trunk\n')
+        
+        # Create commit counter
+        with open('.mygit/commit_count', 'w') as f:
+            f.write('0\n')
+        
+        # Create branches file
+        with open('.mygit/branches', 'w') as f:
+            f.write('trunk\n')
+        
+        # Create current branch file
+        with open('.mygit/current_branch', 'w') as f:
+            f.write('trunk\n')
+        
+        print("Initialized empty mygit repository in .mygit")
+    except OSError:
+        print(f"{os.path.basename(sys.argv[0])}: error: .mygit cannot be created", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

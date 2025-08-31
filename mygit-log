@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+
+# mygit-log - Shows the commit history
+# Usage: mygit-log
+
+import os
+import sys
+
+def get_latest_commit_for_branch(branch_name):
+    """Get the latest commit for a branch"""
+    commit_count_file = '.mygit/commit_count'
+    if not os.path.exists(commit_count_file):
+        return None
+
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+
+    for commit_num in range(commit_count - 1, -1, -1):
+        branch_file = os.path.join('.mygit', 'objects', str(commit_num), '.branch')
+        if os.path.exists(branch_file):
+            with open(branch_file, 'r') as f:
+                commit_branch = f.read().strip()
+            if commit_branch == branch_name:
+                return commit_num
+
+    # Check branches file snapshots to find when the branch was created
+    branches_file = '.mygit/branches'
+    if os.path.exists(branches_file):
+        with open(branches_file, 'r') as f:
+            branches = {line.strip() for line in f if line.strip()}
+        if branch_name in branches:
+            for commit_num in range(commit_count - 1, -1, -1):
+                branches_snapshot = os.path.join('.mygit', 'objects', str(commit_num), '.branches_snapshot')
+                if os.path.exists(branches_snapshot):
+                    with open(branches_snapshot, 'r') as f:
+                        branches_at_commit = {line.strip() for line in f if line.strip()}
+                    if branch_name in branches_at_commit:
+                        return commit_num
+            # Fallback: return the earliest commit if the branch exists
+            for commit_num in range(0, commit_count):
+                commit_dir = os.path.join('.mygit', 'objects', str(commit_num))
+                if os.path.exists(commit_dir) and any(not f.startswith('.') for f in os.listdir(commit_dir)):
+                    return commit_num
+
+    return None
+
+def main():
+    if not os.path.exists('.mygit'):
+        print(f"{os.path.basename(sys.argv[0])}: error: no .mygit directory containing mygit repository exists", file=sys.stderr)
+        sys.exit(1)
+    
+    # Get current branch
+    current_branch_file = '.mygit/current_branch'
+    current_branch = 'trunk'
+    if os.path.exists(current_branch_file):
+        with open(current_branch_file, 'r') as f:
+            current_branch = f.read().strip()
+    
+    # Get current commit count
+    commit_count_file = '.mygit/commit_count'
+    with open(commit_count_file, 'r') as f:
+        commit_count = int(f.read().strip())
+    
+    # Collect commits reachable from the current branch
+    commits_to_show = set()
+    latest_commit = get_latest_commit_for_branch(current_branch)
+    
+    if latest_commit is not None:
+        # Start from the latest commit and work backwards
+        for commit_num in range(latest_commit, -1, -1):
+            commit_dir = os.path.join('.mygit', 'objects', str(commit_num))
+            if not os.path.exists(commit_dir):
+                continue
+            # Check if this commit is associated with the current branch
+            branch_file = os.path.join(commit_dir, '.branch')
+            include_commit = False
+            if os.path.exists(branch_file):
+                with open(branch_file, 'r') as f:
+                    commit_branch = f.read().strip()
+                if commit_branch == current_branch:
+                    include_commit = True
+            if include_commit:
+                # Include this commit and all earlier commits
+                for prev_commit in range(commit_num, -1, -1):
+                    prev_commit_dir = os.path.join('.mygit', 'objects', str(prev_commit))
+                    if os.path.exists(prev_commit_dir):
+                        commits_to_show.add(prev_commit)
+    
+    # Print commits in reverse order
+    for commit_num in range(commit_count - 1, -1, -1):
+        if commit_num in commits_to_show:
+            commit_dir = f'.mygit/objects/{commit_num}'
+            message_file = os.path.join(commit_dir, '.commit_message')
+            if os.path.exists(message_file):
+                with open(message_file, 'r') as f:
+                    message = f.read().strip()
+                print(f"{commit_num} {message}")
+
+if __name__ == '__main__':
+    main()
